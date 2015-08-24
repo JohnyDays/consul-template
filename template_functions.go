@@ -341,16 +341,29 @@ func byTag(in interface{}) (map[string][]interface{}, error) {
 	switch typed := in.(type) {
 	case nil:
 	case []*dep.CatalogService:
-		for _, s := range typed {
-			for _, t := range s.Tags {
-				m[t] = append(m[t], s)
-			}
-		}
 	case []*dep.HealthService:
 		for _, s := range typed {
 			for _, t := range s.Tags {
 				m[t] = append(m[t], s)
 			}
+		}
+	default:
+		return nil, fmt.Errorf("byTag: wrong argument type %T", in)
+	}
+
+	return m, nil
+}
+
+func byTagN(index int, in interface{}) (map[string][]interface{}, error) {
+	m := make(map[string][]interface{})
+
+	switch typed := in.(type) {
+	case nil:
+	case []*dep.CatalogService:
+	case []*dep.HealthService:
+		for _, service := range typed {
+			tag := service.Tags[index]
+			m[tag] = append(m[tag], service)
 		}
 	default:
 		return nil, fmt.Errorf("byTag: wrong argument type %T", in)
