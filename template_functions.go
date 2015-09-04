@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"reflect"
@@ -822,4 +823,118 @@ func addDependency(m map[string]dep.Dependency, d dep.Dependency) {
 	if _, ok := m[d.HashCode()]; !ok {
 		m[d.HashCode()] = d
 	}
+}
+
+// Functions taken from docker-gen by @jwilder
+
+func stripPrefix(s, prefix string) string {
+	path := s
+	for {
+		if strings.HasPrefix(path, ".") {
+			path = path[1:]
+			continue
+		}
+		break
+	}
+	return path
+}
+
+func deepGet(item interface{}, path string) interface{} {
+	if path == "" {
+		return item
+	}
+
+	path = stripPrefix(path, ".")
+	parts := strings.Split(path, ".")
+	itemValue := reflect.ValueOf(item)
+
+	if len(parts) > 0 {
+		switch itemValue.Kind() {
+		case reflect.Struct:
+			fieldValue := itemValue.FieldByName(parts[0])
+			if fieldValue.IsValid() {
+				return deepGet(fieldValue.Interface(), strings.Join(parts[1:], "."))
+			}
+		case reflect.Map:
+			mapValue := itemValue.MapIndex(reflect.ValueOf(parts[0]))
+			if mapValue.IsValid() {
+				return deepGet(mapValue.Interface(), strings.Join(parts[1:], "."))
+			}
+		default:
+			log.Printf("can't group by %s (value %v, kind %s)\n", path, itemValue, itemValue.Kind())
+		}
+		return nil
+	}
+
+	return itemValue.Interface()
+}
+
+func getArrayValues(funcName string, entries interface{}) (*reflect.Value, error) {
+	entriesVal := reflect.ValueOf(entries)
+
+	kind := entriesVal.Kind()
+
+	if kind == reflect.Ptr {
+		entriesVal = reflect.Indirect(entriesVal)
+		kind = entriesVal.Kind()
+	}
+
+	switch kind {
+	case reflect.Array, reflect.Slice:
+		break
+	default:
+		return nil, fmt.Errorf("Must pass an array or slice to '%v'; received %v; kind %v", funcName, entries, kind)
+	}
+	return &entriesVal, nil
+}
+
+func generalizedGroupBy(funcName string, entries interface{}, key string, addEntry func(map[string][]interface{}, interface{}, interface{})) (map[string][]interface{}, error) {
+	entriesVal, err := getArrayValues(funcName, entries)
+
+	if err != nil {
+		return nil, err
+	}
+
+	groups := make(map[string][]interface{})
+	for i := 0; i < entriesVal.Len(); i++ {
+		v := reflect.Indirect(entriesVal.Index(i)).Interface()
+		value := deepGet(v, key)
+		if value != nil {
+			addEntry(groups, value, v)
+		}
+	}
+	return groups, nil
+}
+
+func groupByMulti(entries interface{}, key, sep string) (map[string][]interface{}, error) {
+	return generalizedGroupBy("groupByMulti", entries, key, func(groups map[string][]interface{}, value interface{}, v interface{}) {
+		items := strings.Split(value.(string), sep)
+		for _, item := range items {
+			groups[item] = append(groups[item], v)
+		}
+	})
+}
+
+// groupBy groups a generic array or slice by the path property key
+func groupBy(entries interface{}, key string) (map[string][]interface{}, error) {
+	return generalizedGroupBy("groupBy", entries, key, func(groups map[string][]interface{}, value interface{}, v interface{}) {
+		groups[value.(string)] = append(groups[value.(string)], v)
+	})
+}
+
+// groupByKeys is the same as groupBy but only returns a list of keys
+func groupByKeys(entries interface{}, key string) ([]string, error) {
+	keys, err := generalizedGroupBy("groupByKeys", entries, key, func(groups map[string][]interface{}, value interface{}, v interface{}) {
+		groups[value.(string)] = append(groups[value.(string)], v)
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	ret := []string{}
+	for k := range keys {
+		ret = append(ret, k)
+	}
+	return ret, nil
 }
